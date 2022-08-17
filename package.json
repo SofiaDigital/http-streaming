@@ -1,12 +1,15 @@
 {
   "name": "@videojs/http-streaming",
-  "version": "3.0.0",
+  "version": "3.0.0-sofia",
   "description": "Play back HLS and DASH with Video.js, even where it's not natively supported",
   "main": "dist/videojs-http-streaming.cjs.js",
   "module": "dist/videojs-http-streaming.es.js",
+  "publishConfig": {
+    "registry": "https://nexus.sofiadigital.fi/repository/sofiaNPM/"
+  },
   "repository": {
     "type": "git",
-    "url": "git@github.com:videojs/http-streaming.git"
+    "url": "git@github.com:SofiaDigital/http-streaming.git"
   },
   "scripts": {
     "prenetlify": "npm run build",
@@ -23,7 +26,7 @@
     "docs:images": "npm-run-all -p docs:images:puml docs:images:nomnoml",
     "clean": "shx rm -rf ./dist ./test/dist && shx mkdir -p ./dist ./test/dist",
     "lint": "vjsstandard",
-    "prepublishOnly": "npm-run-all build-prod && vjsverify --verbose --skip-es-check",
+    "prepublishOnly": "npm-run-all build-prod",
     "start": "npm-run-all -p server watch",
     "server": "karma start scripts/karma.conf.js --singleRun=false --auto-watch",
     "test": "npm-run-all lint build-test && karma start scripts/karma.conf.js",
@@ -63,7 +66,7 @@
     "global": "^4.4.0",
     "m3u8-parser": "^6.0.0",
     "mpd-parser": "^1.0.1",
-    "mux.js": "6.2.0",
+    "mux.js": "6.2.0-sofia",
     "video.js": "^7 || ^8"
   },
   "peerDependencies": {

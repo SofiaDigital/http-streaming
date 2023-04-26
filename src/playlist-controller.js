@@ -283,7 +283,24 @@ export class PlaylistController extends videojs.EventTarget {
     this.subtitleSegmentLoader_ =
       new VTTSegmentLoader(merge(segmentLoaderSettings, {
         loaderType: 'vtt',
-        featuresNativeTextTracks: this.tech_.featuresNativeTextTracks
+        featuresNativeTextTracks: this.tech_.featuresNativeTextTracks,
+        loadVttJs: () => new Promise((resolve, reject) => {
+          function onLoad() {
+            tech.off('vttjserror', onError);
+            resolve();
+          }
+
+          function onError() {
+            tech.off('vttjsloaded', onLoad);
+            reject();
+          }
+
+          tech.one('vttjsloaded', onLoad);
+          tech.one('vttjserror', onError);
+
+          // safe to call multiple times, script will be loaded only once:
+          tech.addWebVttScript_();
+        })
       }), options);
 
     this.setupSegmentLoaderListeners_();
@@ -1698,9 +1715,11 @@ export class PlaylistController extends videojs.EventTarget {
       audio: this.audioSegmentLoader_.getCurrentMediaInfo_() || {}
     };
 
+    const playlist = this.mainSegmentLoader_.getPendingSegmentPlaylist() || this.media();
+
     // set "main" media equal to video
     media.video = media.main;
-    const playlistCodecs = codecsForPlaylist(this.main(), this.media());
+    const playlistCodecs = codecsForPlaylist(this.main(), playlist);
     const codecs = {};
     const usingAudioLoader = !!this.mediaTypes_.AUDIO.activePlaylistLoader;
 
@@ -1721,7 +1740,7 @@ export class PlaylistController extends videojs.EventTarget {
     // no codecs, no playback.
     if (!codecs.audio && !codecs.video) {
       this.excludePlaylist({
-        playlistToExclude: this.media(),
+        playlistToExclude: playlist,
         error: { message: 'Could not determine codecs for playlist.' },
         playlistExclusionDuration: Infinity
       });
@@ -1746,13 +1765,13 @@ export class PlaylistController extends videojs.EventTarget {
       }
     });
 
-    if (usingAudioLoader && unsupportedAudio && this.media().attributes.AUDIO) {
-      const audioGroup = this.media().attributes.AUDIO;
+    if (usingAudioLoader && unsupportedAudio && playlist.attributes.AUDIO) {
+      const audioGroup = playlist.attributes.AUDIO;
 
       this.main().playlists.forEach(variant => {
         const variantAudioGroup = variant.attributes && variant.attributes.AUDIO;
 
-        if (variantAudioGroup === audioGroup && variant !== this.media()) {
+        if (variantAudioGroup === audioGroup && variant !== playlist) {
           variant.excludeUntil = Infinity;
         }
       });
@@ -1773,7 +1792,7 @@ export class PlaylistController extends videojs.EventTarget {
       }, '') + '.';
 
       this.excludePlaylist({
-        playlistToExclude: this.media(),
+        playlistToExclude: playlist,
         error: {
           internal: true,
           message
@@ -1800,7 +1819,7 @@ export class PlaylistController extends videojs.EventTarget {
 
       if (switchMessages.length) {
         this.excludePlaylist({
-          playlistToExclude: this.media(),
+          playlistToExclude: playlist,
           error: {
             message: `Codec switching not supported: ${switchMessages.join(', ')}.`,
             internal: true

@@ -59,10 +59,8 @@ const sharedHooks = {
     this.requests = this.env.requests;
     this.mse = useFakeMediaSource();
 
-    if (!videojs.browser.IE_VERSION) {
-      this.oldDevicePixelRatio = window.devicePixelRatio;
-      window.devicePixelRatio = 1;
-    }
+    this.oldDevicePixelRatio = window.devicePixelRatio;
+    window.devicePixelRatio = 1;
 
     // force the HLS tech to run
     this.origSupportsNativeHls = videojs.Vhs.supportsNativeHls;
@@ -342,6 +340,169 @@ QUnit.test('passes options to PlaylistLoader', function(assert) {
   controller.dispose();
 });
 
+QUnit.test('addMetadataToTextTrack adds expected metadata to the metadataTrack', function(assert) {
+  const options = {
+    src: 'test.mpd',
+    tech: this.player.tech_,
+    sourceType: 'dash'
+  };
+
+  // Test messageData property manifest
+  let expectedCueValues = [
+    {
+      startTime: 63857834.256000005,
+      data: 'google_7617584398642699833'
+    },
+    {
+      startTime: 63857835.056,
+      data: 'google_gkmxVFMIdHz413g3pIgZtITUSFFQYDnQ421MGEkVnTA'
+    },
+    {
+      startTime: 63857836.056,
+      data: 'google_Yl7LFi1Fh-TD39nqQzIiGLDD1lx7tYRjjmYND7tEEjM'
+    },
+    {
+      startTime: 63857836.650000006,
+      data: 'google_5437877779805246002'
+    },
+    {
+      startTime: 63857837.056,
+      data: 'google_8X2eBAFbC2cUJmNNHkrcDKqSJQncj2nrVoB2eIu6lrc'
+    },
+    {
+      startTime: 63857838.056,
+      data: 'google_Qyxg2ZhKfBUls-J7oj0Re0_-gCQFviaaEMMDvIOTEWE'
+    },
+    {
+      startTime: 63857838.894,
+      data: 'google_7174574530630198647'
+    },
+    {
+      startTime: 63857839.056,
+      data: 'google_EFt2jovkcT9PqjuLLC5kH7gIIjWvc0iIhROFED6kqsg'
+    },
+    {
+      startTime: 63857840.056,
+      data: 'google_eUHx4vMmAikHojJZLOTR2XZdg1A9b9A8TY7F2CVC3cA'
+    },
+    {
+      startTime: 63857841.056,
+      data: 'google_gkmxVFMIdHz413g3pIgZtITUSFFQYDnQ421MGEkVnTA'
+    },
+    {
+      startTime: 63857841.638000004,
+      data: 'google_1443613685977331553'
+    },
+    {
+      startTime: 63857842.056,
+      data: 'google_Yl7LFi1Fh-TD39nqQzIiGLDD1lx7tYRjjmYND7tEEjM'
+    },
+    {
+      startTime: 63857843.056,
+      data: 'google_8X2eBAFbC2cUJmNNHkrcDKqSJQncj2nrVoB2eIu6lrc'
+    },
+    {
+      startTime: 63857843.13200001,
+      data: 'google_5822903356700578162'
+    }
+  ];
+
+  let controller = new PlaylistController(options);
+
+  controller.mainPlaylistLoader_.mainXml_ = manifests.eventStreamMessageData;
+  controller.mainPlaylistLoader_.handleMain_();
+  // Gather actual cues.
+  let actualCueValues = controller.inbandTextTracks_.metadataTrack_.cues_.map((cue) => {
+    return {
+      startTime: cue.startTime,
+      data: cue.value.data
+    };
+  });
+
+  assert.ok(controller.mainPlaylistLoader_.addMetadataToTextTrack, 'addMetadataToTextTrack is passed to the DASH mainPlaylistLoader');
+  assert.deepEqual(actualCueValues, expectedCueValues, 'expected cue values are added to the metadataTrack');
+  controller.dispose();
+
+  // Test <Event> content manifest
+  expectedCueValues = [
+    {
+      startTime: 63857834.256000005,
+      data: 'foo'
+    },
+    {
+      startTime: 63857835.056,
+      data: 'bar'
+    },
+    {
+      startTime: 63857836.056,
+      data: 'foo_bar'
+    },
+    {
+      startTime: 63857836.650000006,
+      data: 'bar_foo'
+    }
+  ];
+
+  controller = new PlaylistController(options);
+  controller.mainPlaylistLoader_.mainXml_ = manifests.eventStream;
+  controller.mainPlaylistLoader_.handleMain_();
+  actualCueValues = controller.inbandTextTracks_.metadataTrack_.cues_.map((cue) => {
+    return {
+      startTime: cue.startTime,
+      data: cue.value.data
+    };
+  });
+
+  assert.deepEqual(actualCueValues, expectedCueValues, 'expected cue values are added to the metadataTrack');
+  controller.dispose();
+});
+
+QUnit.test('addDateRangesToTextTrack adds expected metadata to the metadataTrack', function(assert) {
+  const options = {
+    src: 'manifest/daterange.m3u8',
+    tech: this.player.tech_,
+    sourceType: 'hls'
+  };
+  const controller = new PlaylistController(options);
+  const dateRanges = [{
+    endDate: new Date(5000),
+    endTime: 3,
+    plannedDuration: 5,
+    scte35Out: '0xFC30200FFF00F0500D00E4612424',
+    startDate: new Date(3000),
+    startTime: 1,
+    id: 'testId',
+    processDateRange: () => {}
+  }];
+  const expectedCueValues = [{
+    endTime: 3,
+    id: 'testId',
+    startTime: 1,
+    value: {data: 5, key: 'PLANNED-DURATION'}
+  }, {
+    endTime: 3,
+    id: 'testId',
+    startTime: 1,
+    value: {data: new ArrayBuffer(), key: 'SCTE35-OUT'}
+  }];
+
+  controller.mainPlaylistLoader_.addDateRangesToTextTrack_(dateRanges);
+  const actualCueValues = controller.inbandTextTracks_.metadataTrack_.cues_.map((cue)=>{
+    return {
+      startTime: cue.startTime,
+      endTime: cue.endTime,
+      id: cue.id,
+      value: {
+        data: cue.value.data,
+        key: cue.value.key
+      }
+    };
+  });
+
+  assert.deepEqual(actualCueValues, expectedCueValues, 'expected cue values are added to the metadataTrack');
+  controller.dispose();
+});
+
 QUnit.test('obeys metadata preload option', function(assert) {
   this.player.preload('metadata');
   // main
@@ -526,6 +687,8 @@ QUnit.test('resets everything for a fast quality change', function(assert) {
   let resets = 0;
   let removeFuncArgs = {};
 
+  this.player.tech_.buffered = () => createTimeRanges(0, 1);
+
   this.playlistController.mediaSource.trigger('sourceopen');
   // main
   this.standardXHRResponse(this.requests.shift());
@@ -540,18 +703,11 @@ QUnit.test('resets everything for a fast quality change', function(assert) {
     originalResync.call(segmentLoader);
   };
 
-  const origResetEverything = segmentLoader.resetEverything;
-  const origRemove = segmentLoader.remove;
+  const origResetLoaderProperties = segmentLoader.resetLoaderProperties;
 
-  segmentLoader.resetEverything = () => {
+  segmentLoader.resetLoaderProperties = () => {
     resets++;
-    origResetEverything.call(segmentLoader);
-  };
-
-  segmentLoader.remove = (start, end) => {
-    assert.equal(end, Infinity, 'on a remove all, end should be Infinity');
-
-    origRemove.call(segmentLoader, start, end);
+    origResetLoaderProperties.call(segmentLoader);
   };
 
   segmentLoader.startingMediaInfo_ = { hasVideo: true };
@@ -587,9 +743,7 @@ QUnit.test('resets everything for a fast quality change', function(assert) {
 
   assert.equal(resyncs, 1, 'resynced segment loader if media is changed');
 
-  assert.equal(resets, 1, 'resetEverything called if media is changed');
-
-  assert.deepEqual(removeFuncArgs, {start: 0, end: 60}, 'remove() called with correct arguments if media is changed');
+  assert.equal(resets, 1, 'resetLoaderProperties called if media is changed');
 });
 
 QUnit.test('loadVttJs should be passed to the vttSegmentLoader and resolved on vttjsloaded', function(assert) {
@@ -607,59 +761,6 @@ QUnit.test('loadVttJs should be passed to the vttSegmentLoader and rejected on v
 
   controller.subtitleSegmentLoader_.loadVttJs().catch(() => {
     assert.equal(stub.callCount, 1, 'tech addWebVttScript called once');
-  });
-});
-
-QUnit.test('seeks in place for fast quality switch on non-IE/Edge browsers', function(assert) {
-  let seeks = 0;
-
-  this.playlistController.mediaSource.trigger('sourceopen');
-  // main
-  this.standardXHRResponse(this.requests.shift());
-  // media
-  this.standardXHRResponse(this.requests.shift());
-
-  const segmentLoader = this.playlistController.mainSegmentLoader_;
-
-  return requestAndAppendSegment({
-    request: this.requests.shift(),
-    segmentLoader,
-    clock: this.clock
-  }).then(() => {
-    // media is changed
-    this.playlistController.selectPlaylist = () => {
-      const playlists = this.playlistController.main().playlists;
-      const currentPlaylist = this.playlistController.media();
-
-      return playlists.find((playlist) => playlist !== currentPlaylist);
-    };
-
-    this.player.tech_.on('seeking', function() {
-      seeks++;
-    });
-
-    let timeBeforeSwitch = this.player.currentTime();
-
-    // mock buffered values so removes are processed
-    segmentLoader.sourceUpdater_.audioBuffer.buffered = createTimeRanges([[0, 10]]);
-    segmentLoader.sourceUpdater_.videoBuffer.buffered = createTimeRanges([[0, 10]]);
-
-    this.playlistController.fastQualityChange_();
-    // trigger updateend to indicate the end of the remove operation
-    segmentLoader.sourceUpdater_.audioBuffer.trigger('updateend');
-    segmentLoader.sourceUpdater_.videoBuffer.trigger('updateend');
-    this.clock.tick(1);
-
-    // we seek an additional 0.04s on edge and ie
-    if (videojs.browser.IS_EDGE || videojs.browser.IE_VERSION) {
-      timeBeforeSwitch += 0.04;
-    }
-    assert.equal(
-      this.player.currentTime(),
-      timeBeforeSwitch,
-      'current time remains the same on fast quality switch'
-    );
-    assert.equal(seeks, 1, 'seek event occurs on fast quality switch');
   });
 });
 
@@ -833,120 +934,6 @@ QUnit.test('demuxed timeToLoadedData, mediaAppends, appendsToLoadedData stats', 
     assert.equal(vhs.stats.mainAppendsToLoadedData, 1, 'main appends to first frame is 1');
     assert.equal(vhs.stats.audioAppendsToLoadedData, 1, 'audio appends to first frame is 1');
     assert.ok(vhs.stats.timeToLoadedData > 0, 'time to first frame is valid');
-  });
-});
-
-QUnit.test('seeks forward 0.04 sec for fast quality switch on Edge', function(assert) {
-  const oldIEVersion = videojs.browser.IE_VERSION;
-  const oldIsEdge = videojs.browser.IS_EDGE;
-  let seeks = 0;
-
-  this.playlistController.mediaSource.trigger('sourceopen');
-  // main
-  this.standardXHRResponse(this.requests.shift());
-  // media
-  this.standardXHRResponse(this.requests.shift());
-
-  const segmentLoader = this.playlistController.mainSegmentLoader_;
-
-  return requestAndAppendSegment({
-    request: this.requests.shift(),
-    segmentLoader,
-    clock: this.clock
-  }).then(() => {
-    // media is changed
-    this.playlistController.selectPlaylist = () => {
-      const playlists = this.playlistController.main().playlists;
-      const currentPlaylist = this.playlistController.media();
-
-      return playlists.find((playlist) => playlist !== currentPlaylist);
-    };
-
-    this.player.tech_.on('seeking', function() {
-      seeks++;
-    });
-
-    const timeBeforeSwitch = this.player.currentTime();
-
-    videojs.browser.IE_VERSION = null;
-    videojs.browser.IS_EDGE = true;
-
-    // mock buffered values so removes are processed
-    segmentLoader.sourceUpdater_.audioBuffer.buffered = createTimeRanges([[0, 10]]);
-    segmentLoader.sourceUpdater_.videoBuffer.buffered = createTimeRanges([[0, 10]]);
-
-    this.playlistController.fastQualityChange_();
-    // trigger updateend to indicate the end of the remove operation
-    segmentLoader.sourceUpdater_.audioBuffer.trigger('updateend');
-    segmentLoader.sourceUpdater_.videoBuffer.trigger('updateend');
-    this.clock.tick(1);
-
-    assert.equal(
-      this.player.currentTime(),
-      timeBeforeSwitch + 0.04,
-      'seeks forward on fast quality switch'
-    );
-    assert.equal(seeks, 1, 'seek event occurs on fast quality switch');
-
-    videojs.browser.IE_VERSION = oldIEVersion;
-    videojs.browser.IS_EDGE = oldIsEdge;
-  });
-});
-
-QUnit.test('seeks forward 0.04 sec for fast quality switch on IE', function(assert) {
-  const oldIEVersion = videojs.browser.IE_VERSION;
-  const oldIsEdge = videojs.browser.IS_EDGE;
-  let seeks = 0;
-
-  this.playlistController.mediaSource.trigger('sourceopen');
-  // main
-  this.standardXHRResponse(this.requests.shift());
-  // media
-  this.standardXHRResponse(this.requests.shift());
-
-  const segmentLoader = this.playlistController.mainSegmentLoader_;
-
-  return requestAndAppendSegment({
-    request: this.requests.shift(),
-    segmentLoader,
-    clock: this.clock
-  }).then(() => {
-    // media is changed
-    this.playlistController.selectPlaylist = () => {
-      const playlists = this.playlistController.main().playlists;
-      const currentPlaylist = this.playlistController.media();
-
-      return playlists.find((playlist) => playlist !== currentPlaylist);
-    };
-
-    this.player.tech_.on('seeking', function() {
-      seeks++;
-    });
-
-    const timeBeforeSwitch = this.player.currentTime();
-
-    videojs.browser.IE_VERSION = 11;
-    videojs.browser.IS_EDGE = false;
-
-    // mock buffered values so removes are processed
-    segmentLoader.sourceUpdater_.audioBuffer.buffered = createTimeRanges([[0, 10]]);
-    segmentLoader.sourceUpdater_.videoBuffer.buffered = createTimeRanges([[0, 10]]);
-
-    this.playlistController.fastQualityChange_();
-    // trigger updateend to indicate the end of the remove operation
-    segmentLoader.sourceUpdater_.audioBuffer.trigger('updateend');
-    segmentLoader.sourceUpdater_.videoBuffer.trigger('updateend');
-    this.clock.tick(1);
-
-    assert.equal(
-      this.player.currentTime(),
-      timeBeforeSwitch + 0.04,
-      'seeks forward on fast quality switch'
-    );
-    assert.equal(seeks, 1, 'seek event occurs on fast quality switch');
-
-    videojs.browser.IE_VERSION = oldIEVersion;
-    videojs.browser.IS_EDGE = oldIsEdge;
   });
 });
 
@@ -3352,6 +3339,75 @@ QUnit.test('adds subtitle tracks when a media playlist is loaded', function(asse
   assert.equal(this.player.textTracks().length, 0, 'text tracks cleaned');
 });
 
+QUnit.test('adds subtitle tracks including forced subtitles when a media playlist is loaded', function(assert) {
+  let vhsWebvttEvents = 0;
+
+  this.requests.length = 0;
+  this.player.dispose();
+  this.player = createPlayer({
+    html5: {
+      vhs: { useForcedSubtitles: true }
+    }
+  });
+  this.player.src({
+    src: 'manifest/main-subtitles.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  this.clock.tick(1);
+
+  this.player.tech_.on('usage', (event) => {
+    if (event.name === 'vhs-webvtt') {
+      vhsWebvttEvents++;
+    }
+  });
+
+  const playlistController = this.player.tech_.vhs.playlistController_;
+
+  assert.equal(vhsWebvttEvents, 0, 'there is no webvtt detected');
+  assert.equal(this.player.textTracks().length, 1, 'one text track to start');
+  assert.equal(
+    this.player.textTracks()[0].label,
+    'segment-metadata',
+    'only segment-metadata text track'
+  );
+
+  // main, contains media groups for subtitles
+  this.standardXHRResponse(this.requests.shift());
+
+  // we wait for loadedmetadata before setting subtitle tracks, so we need to wait for a
+  // media playlist
+  assert.equal(this.player.textTracks().length, 1, 'only one text track after main');
+
+  // media
+  this.standardXHRResponse(this.requests.shift());
+
+  const main = playlistController.mainPlaylistLoader_.main;
+  const subs = main.mediaGroups.SUBTITLES.subs;
+  const subsArr = Object.keys(subs).map(key => subs[key]);
+
+  assert.equal(subsArr.length, 4, 'got 4 subtitles');
+  assert.equal(subsArr.filter(sub => sub.forced === false).length, 2, '2 forced');
+  assert.equal(subsArr.filter(sub => sub.forced === true).length, 2, '2 non-forced');
+
+  const textTracks = this.player.textTracks();
+
+  assert.equal(textTracks.length, 5, 'forced text tracks were added');
+  assert.equal(textTracks[1].mode, 'disabled', 'track starts disabled');
+  assert.equal(textTracks[2].mode, 'disabled', 'track starts disabled');
+  assert.equal(vhsWebvttEvents, 1, 'there is webvtt detected in the rendition');
+
+  // change source to make sure tracks are cleaned up
+  this.player.src({
+    src: 'http://example.com/media.mp4',
+    type: 'video/mp4'
+  });
+
+  this.clock.tick(1);
+
+  assert.equal(this.player.textTracks().length, 0, 'text tracks cleaned');
+});
+
 QUnit.test('switches off subtitles on subtitle errors', function(assert) {
   this.requests.length = 0;
   this.player.dispose();
@@ -3598,28 +3654,23 @@ QUnit.test('subtitle segment loader resets on seeks', function(assert) {
   this.clock.tick(1);
 
   let resetCount = 0;
-  let abortCount = 0;
   let loadCount = 0;
 
   playlistController.subtitleSegmentLoader_.resetEverything = () => resetCount++;
-  playlistController.subtitleSegmentLoader_.abort = () => abortCount++;
   playlistController.subtitleSegmentLoader_.load = () => loadCount++;
 
   this.player.pause();
   playlistController.setCurrentTime(5);
 
   assert.equal(resetCount, 1, 'reset subtitle segment loader');
-  assert.equal(abortCount, 1, 'aborted subtitle segment loader');
   assert.equal(loadCount, 1, 'called load on subtitle segment loader');
 
   this.player.play();
   resetCount = 0;
-  abortCount = 0;
   loadCount = 0;
   playlistController.setCurrentTime(10);
 
   assert.equal(resetCount, 1, 'reset subtitle segment loader');
-  assert.equal(abortCount, 1, 'aborted subtitle segment loader');
   assert.equal(loadCount, 1, 'called load on subtitle segment loader');
 });
 
@@ -4703,13 +4754,14 @@ QUnit.test('on error all segment and playlist loaders are paused and aborted', f
 
 QUnit.test('can pass or select a playlist for fastQualityChange', function(assert) {
   const calls = {
-    resetEverything: 0,
     resyncLoader: 0,
     media: 0,
     selectPlaylist: 0
   };
 
   const pc = this.playlistController;
+
+  this.player.tech_.buffered = () => createTimeRanges(0, 1);
 
   pc.mediaSource.trigger('sourceopen');
   // main
@@ -4734,24 +4786,18 @@ QUnit.test('can pass or select a playlist for fastQualityChange', function(asser
     calls.resyncLoader++;
   };
 
-  pc.mainSegmentLoader_.resetEverything = () => {
-    calls.resetEverything++;
-  };
-
   pc.fastQualityChange_(pc.main().playlists[1]);
   assert.deepEqual(calls, {
-    resetEverything: 1,
     media: 1,
     selectPlaylist: 0,
-    resyncLoader: 0
+    resyncLoader: 1
   }, 'calls expected function when passed a playlist');
 
   pc.fastQualityChange_();
   assert.deepEqual(calls, {
-    resetEverything: 2,
     media: 2,
     selectPlaylist: 1,
-    resyncLoader: 0
+    resyncLoader: 2
   }, 'calls expected function when not passed a playlist');
 });
 

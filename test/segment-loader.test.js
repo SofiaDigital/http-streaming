@@ -2421,6 +2421,9 @@ QUnit.module('SegmentLoader', function(hooks) {
             }
           });
 
+        this.sourceUpdater_ = loader.sourceUpdater_;
+        this.inbandTextTracks_ = loader.inbandTextTracks_;
+        this.tech_ = loader.vhs_.tech_;
         standardXHRResponse(this.requests.shift(), muxedSegment());
 
       });
@@ -2491,6 +2494,9 @@ QUnit.module('SegmentLoader', function(hooks) {
           // Simulate a caption event happening that will call handleCaptions_
           const dispatchType = 0x10;
 
+          // Ensure no video buffer is present in the test case
+          loader.sourceUpdater_.videoBuffer = undefined;
+
           loader.handleId3_(loader.pendingSegment_, metadata, dispatchType);
         });
 
@@ -2508,6 +2514,8 @@ QUnit.module('SegmentLoader', function(hooks) {
           const cue = addCueSpy.getCall(0).args[0];
 
           assert.strictEqual(cue.value.data, 'This is a priv tag', 'included the text');
+
+          assert.strictEqual(cue.startTime, metadata[0].cueTime + loader.sourceUpdater_.audioTimestampOffset(), 'cue.startTime offset from audioTimestampOffset');
           done();
         });
 
@@ -2528,6 +2536,9 @@ QUnit.module('SegmentLoader', function(hooks) {
             }
           });
 
+        this.sourceUpdater_ = loader.sourceUpdater_;
+        this.inbandTextTracks_ = loader.inbandTextTracks_;
+        this.tech_ = loader.vhs_.tech_;
         standardXHRResponse(this.requests.shift(), audioSegment());
       });
     });

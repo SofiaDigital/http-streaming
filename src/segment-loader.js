@@ -14,8 +14,6 @@ import logger from './util/logger';
 import { concatSegments } from './util/segment';
 import {
   createCaptionsTrackIfNotExists,
-  createMetadataTrackIfNotExists,
-  addMetadata,
   addCaptionData,
   removeCuesFromTrack
 } from './util/text-tracks';
@@ -563,6 +561,7 @@ export default class SegmentLoader extends videojs.EventTarget {
     this.useDtsForTimestampOffset_ = settings.useDtsForTimestampOffset;
     this.captionServices_ = settings.captionServices;
     this.exactManifestTimings = settings.exactManifestTimings;
+    this.addMetadataToTextTrack = settings.addMetadataToTextTrack;
 
     // private instance variables
     this.checkBufferTimeout_ = null;
@@ -576,7 +575,7 @@ export default class SegmentLoader extends videojs.EventTarget {
     // TODO possibly move gopBuffer and timeMapping info to a separate controller
     this.gopBuffer_ = [];
     this.timeMapping_ = 0;
-    this.safeAppend_ = videojs.browser.IE_VERSION >= 11;
+    this.safeAppend_ = false;
     this.appendInitSegment_ = {
       audio: true,
       video: true
@@ -630,6 +629,8 @@ export default class SegmentLoader extends videojs.EventTarget {
 
     // ...for determining the fetch location
     this.fetchAtBuffer_ = false;
+    // For comparing with currentTime when overwriting segments on fastQualityChange_ changes. Use -1 as the inactive flag.
+    this.replaceSegmentsUntil_ = -1;
 
     this.logger_ = logger(`SegmentLoader[${this.loaderType_}]`);
 
@@ -1049,13 +1050,15 @@ export default class SegmentLoader extends videojs.EventTarget {
         // we must reset/resync the segment loader when we switch renditions and
         // the segment loader is already synced to the previous rendition
 
-        // on playlist changes we want it to be possible to fetch
-        // at the buffer for vod but not for live. So we use resetLoader
-        // for live and resyncLoader for vod. We want this because
-        // if a playlist uses independent and non-independent segments/parts the
-        // buffer may not accurately reflect the next segment that we should try
-        // downloading.
-        if (!newPlaylist.endList) {
+        // We only want to reset the loader here for LLHLS playback, as resetLoader sets fetchAtBuffer_
+        // to false, resulting in fetching segments at currentTime and causing repeated
+        // same-segment requests on playlist change. This erroneously drives up the playback watcher
+        // stalled segment count, as re-requesting segments at the currentTime or browser cached segments
+        // will not change the buffer.
+        // Reference for LLHLS fixes: https://github.com/videojs/http-streaming/pull/1201
+        const isLLHLS = !newPlaylist.endList && typeof newPlaylist.partTargetDuration === 'number';
+
+        if (isLLHLS) {
           this.resetLoader();
         } else {
           this.resyncLoader();
@@ -1156,18 +1159,25 @@ export default class SegmentLoader extends videojs.EventTarget {
   }
 
   /**
-   * Delete all the buffered data and reset the SegmentLoader
-   *
-   * @param {Function} [done] an optional callback to be executed when the remove
-   * operation is complete
+   * Resets the segment loader ended and init properties.
    */
-  resetEverything(done) {
+  resetLoaderProperties() {
     this.ended_ = false;
     this.activeInitSegmentId_ = null;
     this.appendInitSegment_ = {
       audio: true,
       video: true
     };
+  }
+
+  /**
+   * Delete all the buffered data and reset the SegmentLoader
+   *
+   * @param {Function} [done] an optional callback to be executed when the remove
+   * operation is complete
+   */
+  resetEverything(done) {
+    this.resetLoaderProperties();
     this.resetLoader();
 
     // remove from 0, the earliest point, to Infinity, to signify removal of everything.
@@ -1481,11 +1491,17 @@ export default class SegmentLoader extends videojs.EventTarget {
       nextPart = nextSegment.parts[0];
     }
 
+    // independentSegments applies to every segment in a playlist. If independentSegments appears in a main playlist,
+    // it applies to each segment in each media playlist.
+    // https://datatracker.ietf.org/doc/html/draft-pantos-http-live-streaming-23#section-4.3.5.1
+    const hasIndependentSegments = (this.vhs_.playlists && this.vhs_.playlists.main && this.vhs_.playlists.main.independentSegments) ||
+      this.playlist_.independentSegments;
+
     // if we have no buffered data then we need to make sure
     // that the next part we append is "independent" if possible.
     // So we check if the previous part is independent, and request
     // it if it is.
-    if (!bufferedTime && nextPart && !nextPart.independent) {
+    if (!bufferedTime && nextPart && !hasIndependentSegments && !nextPart.independent) {
 
       if (next.partIndex === 0) {
         const lastSegment = segments[next.mediaIndex - 1];
@@ -1872,21 +1888,7 @@ export default class SegmentLoader extends videojs.EventTarget {
       this.metadataQueue_.id3.push(this.handleId3_.bind(this, simpleSegment, id3Frames, dispatchType));
       return;
     }
-
-    const timestampOffset = this.sourceUpdater_.videoTimestampOffset() === null ?
-      this.sourceUpdater_.audioTimestampOffset() :
-      this.sourceUpdater_.videoTimestampOffset();
-
-    // There's potentially an issue where we could double add metadata if there's a muxed
-    // audio/video source with a metadata track, and an alt audio with a metadata track.
-    // However, this probably won't happen, and if it does it can be handled then.
-    createMetadataTrackIfNotExists(this.inbandTextTracks_, dispatchType, this.vhs_.tech_);
-    addMetadata({
-      inbandTextTracks: this.inbandTextTracks_,
-      metadataArray: id3Frames,
-      timestampOffset,
-      videoDuration: this.duration_()
-    });
+    this.addMetadataToTextTrack(dispatchType, id3Frames, this.duration_());
   }
 
   processMetadataQueue_() {
@@ -3057,7 +3059,10 @@ export default class SegmentLoader extends videojs.EventTarget {
     this.logger_(`Appended ${segmentInfoString(segmentInfo)}`);
 
     this.addSegmentMetadataCue_(segmentInfo);
-    this.fetchAtBuffer_ = true;
+    if (this.currentTime_() >= this.replaceSegmentsUntil_) {
+      this.replaceSegmentsUntil_ = -1;
+      this.fetchAtBuffer_ = true;
+    }
     if (this.currentTimeline_ !== segmentInfo.timeline) {
       this.timelineChangeController_.lastTimelineChange({
         type: this.loaderType_,
@@ -3191,6 +3196,7 @@ export default class SegmentLoader extends videojs.EventTarget {
       custom: segment.custom,
       dateTimeObject: segment.dateTimeObject,
       dateTimeString: segment.dateTimeString,
+      programDateTime: segment.programDateTime,
       bandwidth: segmentInfo.playlist.attributes.BANDWIDTH,
       resolution: segmentInfo.playlist.attributes.RESOLUTION,
       codecs: segmentInfo.playlist.attributes.CODECS,
@@ -3209,5 +3215,17 @@ export default class SegmentLoader extends videojs.EventTarget {
     cue.value = value;
 
     this.segmentMetadataTrack_.addCue(cue);
+  }
+
+  /**
+   * Public setter for defining the private replaceSegmentsUntil_ property, which
+   * determines when we can return fetchAtBuffer to true if overwriting the buffer.
+   *
+   * @param {number} bufferedEnd the end of the buffered range to replace segments
+   * until currentTime reaches this time.
+   */
+  set replaceSegmentsUntil(bufferedEnd) {
+    this.logger_(`Replacing currently buffered segments until ${bufferedEnd}`);
+    this.replaceSegmentsUntil_ = bufferedEnd;
   }
 }

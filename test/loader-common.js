@@ -1,5 +1,4 @@
 import QUnit from 'qunit';
-import videojs from 'video.js';
 import xhrFactory from '../src/xhr';
 import Config from '../src/config';
 import document from 'global/document';
@@ -53,7 +52,9 @@ export const LoaderCommonHooks = {
         playbackRate: () => this.playbackRate,
         currentTime: () => this.currentTime,
         textTracks: () => {},
-        addRemoteTextTrack: () => {},
+        addRemoteTextTrack: (track) => {
+          return track;
+        },
         trigger: () => {}
       }
     };
@@ -61,10 +62,16 @@ export const LoaderCommonHooks = {
     this.goalBufferLength =
       PlaylistController.prototype.goalBufferLength.bind(this);
     this.mediaSource = new window.MediaSource();
-    this.sourceUpdater = new SourceUpdater(this.mediaSource);
+    this.sourceUpdater_ = new SourceUpdater(this.mediaSource);
+    this.inbandTextTracks_ = {
+      metadataTrack_: {
+        addCue: () => {}
+      }
+    };
     this.syncController = new SyncController();
     this.decrypter = new Decrypter();
     this.timelineChangeController = new TimelineChangeController();
+    this.addMetadataToTextTrack = PlaylistController.prototype.addMetadataToTextTrack.bind(this);
 
     this.video = document.createElement('video');
 
@@ -81,7 +88,7 @@ export const LoaderCommonHooks = {
 
     this.env.restore();
     this.decrypter.terminate();
-    this.sourceUpdater.dispose();
+    this.sourceUpdater_.dispose();
     this.timelineChangeController.dispose();
   }
 };
@@ -106,10 +113,11 @@ export const LoaderCommonSettings = function(settings) {
     duration: () => this.mediaSource.duration,
     goalBufferLength: () => this.goalBufferLength(),
     mediaSource: this.mediaSource,
-    sourceUpdater: this.sourceUpdater,
+    sourceUpdater: this.sourceUpdater_,
     syncController: this.syncController,
     decrypter: this.decrypter,
-    timelineChangeController: this.timelineChangeController
+    timelineChangeController: this.timelineChangeController,
+    addMetadataToTextTrack: this.addMetadataToTextTrack
   }, settings);
 };
 
@@ -857,7 +865,49 @@ export const LoaderCommonFactory = ({
       });
     });
 
-    QUnit.test('live rendition switch uses resetLoader', function(assert) {
+    QUnit.test('live LLHLS rendition switch uses resetLoader', function(assert) {
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+
+        loader.playlist(playlistWithDuration(50, {
+          mediaSequence: 0,
+          endList: false
+        }));
+
+        loader.load();
+        loader.mediaIndex = 0;
+        let resyncCalled = false;
+        let resetCalled = false;
+        const origReset = loader.resetLoader;
+        const origResync = loader.resyncLoader;
+
+        loader.resetLoader = function() {
+          resetCalled = true;
+          return origReset.call(loader);
+        };
+
+        loader.resyncLoader = function() {
+          resyncCalled = true;
+          return origResync.call(loader);
+        };
+
+        const newPlaylist = playlistWithDuration(50, {
+          mediaSequence: 0,
+          endList: false
+        });
+
+        newPlaylist.uri = 'playlist2.m3u8';
+        newPlaylist.partTargetDuration = 1;
+
+        loader.playlist(newPlaylist);
+
+        assert.true(resetCalled, 'reset was called');
+        assert.true(resyncCalled, 'resync was called');
+
+        return Promise.resolve();
+      });
+    });
+
+    QUnit.test('live rendition switch uses resyncLoader', function(assert) {
       return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
 
         loader.playlist(playlistWithDuration(50, {
@@ -891,8 +941,8 @@ export const LoaderCommonFactory = ({
 
         loader.playlist(newPlaylist);
 
-        assert.true(resetCalled, 'reset was called');
         assert.true(resyncCalled, 'resync was called');
+        assert.false(resetCalled, 'reset was not called');
 
         return Promise.resolve();
       });
@@ -941,16 +991,7 @@ export const LoaderCommonFactory = ({
 
     // only main/fmp4 segment loaders use async appends and parts/partIndex
     if (usesAsyncAppends) {
-      let testFn = 'test';
-
-      if (videojs.browser.IE_VERSION) {
-        testFn = 'skip';
-      }
-
-      // this test has a race condition on ie 11 that causes it to fail some of the time.
-      // Since IE 11 isn't really a priority and it only fails some of the time we decided to
-      // skip this on IE 11.
-      QUnit[testFn]('playlist change before any appends does not error', function(assert) {
+      QUnit.test('playlist change before any appends does not error', function(assert) {
         return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
           loader.playlist(playlistWithDuration(50, {
             uri: 'bar-720.m3u8',
@@ -1406,6 +1447,52 @@ export const LoaderCommonFactory = ({
 
       assert.equal(segmentInfo2.partIndex, 4, 'previous part');
       assert.equal(segmentInfo2.mediaIndex, 3, 'previous segment');
+    });
+
+    QUnit.test('chooses the correct next segment if independentSegments is true on the playlist', function(assert) {
+      loader.buffered_ = () => createTimeRanges();
+      const playlist = playlistWithDuration(50, {llhls: true});
+
+      playlist.independentSegments = true;
+
+      loader.hasPlayed_ = () => true;
+      loader.syncPoint_ = null;
+
+      loader.playlist(playlist);
+      loader.load();
+
+      loader.currentTime_ = () => 46;
+      // make the previous part indepenent, ensure we don't go back to that part.
+      playlist.segments[4].parts[1].independent = true;
+      const segmentInfo = loader.chooseNextRequest_();
+
+      assert.equal(segmentInfo.partIndex, 2, 'chooses part 2');
+      assert.equal(segmentInfo.mediaIndex, 4, 'same segment');
+    });
+
+    QUnit.test('chooses the correct next segment if independentSegments is true on the main playlist', function(assert) {
+      loader.buffered_ = () => createTimeRanges();
+      const playlist = playlistWithDuration(50, {llhls: true});
+
+      loader.vhs_.playlists = {
+        main: {
+          independentSegments: true
+        }
+      };
+
+      loader.hasPlayed_ = () => true;
+      loader.syncPoint_ = null;
+
+      loader.playlist(playlist);
+      loader.load();
+
+      loader.currentTime_ = () => 46;
+      // make the previous part indepenent, ensure we don't go back to that part.
+      playlist.segments[4].parts[1].independent = true;
+      const segmentInfo = loader.chooseNextRequest_();
+
+      assert.equal(segmentInfo.partIndex, 2, 'chooses part 2');
+      assert.equal(segmentInfo.mediaIndex, 4, 'same segment');
     });
 
     QUnit.test('processing segment reachable even after playlist update removes it', function(assert) {

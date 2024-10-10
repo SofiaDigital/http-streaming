@@ -21,7 +21,7 @@
       rep.playlist.disabled = rep.id !== id;
     });
 
-    window.pc.fastQualityChange_();
+    window.pc.fastQualityChange_(selectedOption);
   });
   var isManifestObjectType = function(url) {
     return (/application\/vnd\.videojs\.vhs\+json/).test(url);
@@ -432,6 +432,27 @@
     }, 100);
   };
 
+  var setupContentSteeringData = function(player) {
+    var currentPathwayEl = document.querySelector('.current-pathway');
+    var availablePathwaysEl = document.querySelector('.available-pathways');
+    var steeringManifestEl = document.querySelector('.steering-manifest');
+
+    player.one('loadedmetadata', function() {
+      var steeringController = player.tech_.vhs && player.tech_.vhs.playlistController_.contentSteeringController_;
+
+      if (!steeringController) {
+        return;
+      }
+      var onContentSteering = function() {
+        currentPathwayEl.textContent = steeringController.currentPathway;
+        availablePathwaysEl.textContent = Array.from(steeringController.availablePathways_).join(', ');
+        steeringManifestEl.textContent = JSON.stringify(steeringController.steeringManifest);
+      };
+
+      steeringController.on('content-steering', onContentSteering);
+    });
+  };
+
   [
     'debug',
     'autoplay',
@@ -450,6 +471,7 @@
     'network-info',
     'dts-offset',
     'override-native',
+    'use-mms',
     'preload',
     'mirror-source',
     'forced-subtitles'
@@ -500,6 +522,7 @@
       'llhls',
       'buffer-water',
       'override-native',
+      'use-mms',
       'liveui',
       'pixel-diff-selector',
       'network-info',
@@ -538,7 +561,8 @@
         'node_modules/video.js/dist/alt/video.core',
         'node_modules/videojs-contrib-eme/dist/videojs-contrib-eme',
         'node_modules/videojs-contrib-quality-levels/dist/videojs-contrib-quality-levels',
-        'node_modules/videojs-http-source-selector/dist/videojs-http-source-selector'
+        'node_modules/videojs-contrib-quality-menu/dist/videojs-contrib-quality-menu'
+
       ].map(function(url) {
         return url + (event.target.checked ? '.min' : '') + '.js';
       });
@@ -565,6 +589,7 @@
         var videoEl = document.createElement('video-js');
 
         videoEl.setAttribute('controls', '');
+        videoEl.setAttribute('playsInline', '');
         videoEl.setAttribute('preload', stateEls.preload.options[stateEls.preload.selectedIndex].value || 'auto');
         videoEl.className = 'vjs-default-skin';
         fixture.appendChild(videoEl);
@@ -573,15 +598,14 @@
 
         player = window.player = window.videojs(videoEl, {
           plugins: {
-            httpSourceSelector: {
-              default: 'auto'
-            }
+            qualityMenu: {}
           },
           liveui: stateEls.liveui.checked,
           enableSourceset: mirrorSource,
           html5: {
             vhs: {
               overrideNative: getInputValue(stateEls['override-native']),
+              experimentalUseMMS: getInputValue(stateEls['use-mms']),
               bufferBasedABR: getInputValue(stateEls['buffer-water']),
               llhls: getInputValue(stateEls.llhls),
               exactManifestTimings: getInputValue(stateEls['exact-manifest-timings']),
@@ -592,9 +616,9 @@
             }
           }
         });
-
         setupPlayerStats(player);
         setupSegmentMetadata(player);
+        setupContentSteeringData(player);
 
         // save player muted state interation
         player.on('volumechange', function() {
@@ -746,5 +770,75 @@
 
     // run the change handler for the first time
     stateEls.minified.dispatchEvent(newEvent('change'));
+
+    // Setup the download / copy log buttons
+    const downloadLogsButton = document.getElementById('download-logs');
+    const copyLogsButton = document.getElementById('copy-logs');
+
+    /**
+     * Window location and history joined with line breaks, stringifying any objects
+     *
+     * @return {string} Stringified history
+     */
+    const stringifiedLogHistory = () => {
+      const player = document.querySelector('video-js').player;
+      const logs = [].concat(player.log.history());
+      const withVhs = !!player.tech(true).vhs;
+
+      return [
+        window.location.href,
+        window.navigator.userAgent,
+        `Video.js ${window.videojs.VERSION}`,
+        `Using VHS: ${withVhs}`,
+        withVhs ? JSON.stringify(player.tech(true).vhs.version()) : ''
+      ].concat(logs.map(entryArgs => {
+        return entryArgs.map(item => {
+          return typeof item === 'object' ? JSON.stringify(item) : item;
+        });
+      })).join('\n');
+    };
+
+    /**
+     * Turn a bootstrap button class on briefly then revert to btn-outline-ptimary
+     *
+     * @param {HTMLElement} el Element to add class to
+     * @param {string} stateClass Bootstrap button class suffix
+     */
+    const doneFeedback = (el, stateClass) => {
+      el.classList.add(`btn-${stateClass}`);
+      el.classList.remove('btn-outline-secondary');
+
+      window.setTimeout(() => {
+        el.classList.add('btn-outline-secondary');
+        el.classList.remove(`btn-${stateClass}`);
+      }, 1500);
+    };
+
+    downloadLogsButton.addEventListener('click', function() {
+      const logHistory = stringifiedLogHistory();
+      const a = document.createElement('a');
+      const href = URL.createObjectURL(new Blob([logHistory], { type: 'text/plain' }));
+
+      a.setAttribute('download', 'vhs-player-logs.txt');
+      a.setAttribute('target', '_blank');
+      a.href = href;
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+      doneFeedback(downloadLogsButton, 'success');
+    });
+
+    copyLogsButton.addEventListener('click', function() {
+      const logHistory = stringifiedLogHistory();
+
+      window.navigator.clipboard.writeText(logHistory).then(z => {
+        doneFeedback(copyLogsButton, 'success');
+      }).catch(e => {
+        doneFeedback(copyLogsButton, 'danger');
+        console.log('Copy failed', e);
+      });
+
+    });
   };
+
 }(window));

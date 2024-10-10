@@ -678,7 +678,15 @@ class VhsHandler extends Component {
     this.on(this.tech_, 'play', this.play);
   }
 
-  setOptions_() {
+  /**
+   * Set VHS options based on options from configuration, as well as partial
+   * options to be passed at a later time.
+   *
+   * @param {Object} options A partial chunk of config options
+   */
+  setOptions_(options = {}) {
+    this.options_ = merge(this.options_, options);
+
     // defaults
     this.options_.withCredentials = this.options_.withCredentials || false;
     this.options_.limitRenditionByPlayerDimensions = this.options_.limitRenditionByPlayerDimensions === false ? false : true;
@@ -730,6 +738,7 @@ class VhsHandler extends Component {
     [
       'withCredentials',
       'useDevicePixelRatio',
+      'customPixelRatio',
       'limitRenditionByPlayerDimensions',
       'bandwidth',
       'customTagParsers',
@@ -753,6 +762,17 @@ class VhsHandler extends Component {
 
     this.limitRenditionByPlayerDimensions = this.options_.limitRenditionByPlayerDimensions;
     this.useDevicePixelRatio = this.options_.useDevicePixelRatio;
+
+    const customPixelRatio = this.options_.customPixelRatio;
+
+    // Ensure the custom pixel ratio is a number greater than or equal to 0
+    if (typeof customPixelRatio === 'number' && customPixelRatio >= 0) {
+      this.customPixelRatio = customPixelRatio;
+    }
+  }
+  // alias for public method to set options
+  setOptions(options = {}) {
+    this.setOptions_(options);
   }
   /**
    * called when player.src gets called, handle a new source
@@ -775,6 +795,8 @@ class VhsHandler extends Component {
     this.options_.seekTo = (time) => {
       this.tech_.setCurrentTime(time);
     };
+    // pass player to allow for player level eventing on construction.
+    this.options_.player_ = this.player_;
 
     this.playlistController_ = new PlaylistController(this.options_);
 
@@ -792,6 +814,7 @@ class VhsHandler extends Component {
 
     this.playbackWatcher_ = new PlaybackWatcher(playbackWatcherOptions);
 
+    this.attachStreamingEventListeners_();
     this.playlistController_.on('error', () => {
       const player = videojs.players[this.tech_.options_.playerId];
       let error = this.playlistController_.error;
@@ -1114,42 +1137,7 @@ class VhsHandler extends Component {
     });
 
     this.player_.tech_.on('keystatuschange', (e) => {
-      if (e.status !== 'output-restricted') {
-        return;
-      }
-
-      const mainPlaylist = this.playlistController_.main();
-
-      if (!mainPlaylist || !mainPlaylist.playlists) {
-        return;
-      }
-
-      const excludedHDPlaylists = [];
-
-      // Assume all HD streams are unplayable and exclude them from ABR selection
-      mainPlaylist.playlists.forEach(playlist => {
-        if (playlist && playlist.attributes && playlist.attributes.RESOLUTION &&
-            playlist.attributes.RESOLUTION.height >= 720) {
-          if (!playlist.excludeUntil || playlist.excludeUntil < Infinity) {
-
-            playlist.excludeUntil = Infinity;
-            excludedHDPlaylists.push(playlist);
-          }
-        }
-      });
-
-      if (excludedHDPlaylists.length) {
-        videojs.log.warn(
-          'DRM keystatus changed to "output-restricted." Removing the following HD playlists ' +
-          'that will most likely fail to play and clearing the buffer. ' +
-          'This may be due to HDCP restrictions on the stream and the capabilities of the current device.',
-          ...excludedHDPlaylists
-        );
-
-        // Clear the buffer before switching playlists, since it may already contain unplayable segments
-        this.playlistController_.mainSegmentLoader_.resetEverything();
-        this.playlistController_.fastQualityChange_();
-      }
+      this.playlistController_.updatePlaylistByKeyStatus(e.keyId, e.status);
     });
 
     this.handleWaitingForKey_ = this.handleWaitingForKey_.bind(this);
@@ -1338,6 +1326,34 @@ class VhsHandler extends Component {
     // This allows hooks to be set before the source is set to vhs when handleSource is called.
     this.player_.trigger('xhr-hooks-ready');
   }
+
+  attachStreamingEventListeners_() {
+    const playlistControllerEvents = [
+      'seekablerangeschanged',
+      'bufferedrangeschanged',
+      'contentsteeringloadstart',
+      'contentsteeringloadcomplete',
+      'contentsteeringparsed'
+    ];
+
+    const playbackWatcher = [
+      'gapjumped',
+      'playedrangeschanged'
+    ];
+
+    // re-emit streaming events and payloads on the player.
+    playlistControllerEvents.forEach((eventName) => {
+      this.playlistController_.on(eventName, (metadata) => {
+        this.player_.trigger({...metadata});
+      });
+    });
+
+    playbackWatcher.forEach((eventName) => {
+      this.playbackWatcher_.on(eventName, (metadata) => {
+        this.player_.trigger({...metadata});
+      });
+    });
+  }
 }
 
 /**
@@ -1352,6 +1368,11 @@ const VhsSourceHandler = {
   VERSION: vhsVersion,
   canHandleSource(srcObj, options = {}) {
     const localOptions = merge(videojs.options, options);
+
+    // If not opting to experimentalUseMMS, and playback is only supported with MediaSource, cannot handle source
+    if (!localOptions.vhs.experimentalUseMMS && !browserSupportsCodec('avc1.4d400d,mp4a.40.2', false)) {
+      return false;
+    }
 
     return VhsSourceHandler.canPlayType(srcObj.type, localOptions);
   },
@@ -1387,13 +1408,14 @@ const VhsSourceHandler = {
 };
 
 /**
- * Check to see if the native MediaSource object exists and supports
- * an MP4 container with both H.264 video and AAC-LC audio.
+ * Check to see if either the native MediaSource or ManagedMediaSource
+ * objectx exist and support an MP4 container with both H.264 video
+ * and AAC-LC audio.
  *
  * @return {boolean} if  native media sources are supported
  */
 const supportsNativeMediaSources = () => {
-  return browserSupportsCodec('avc1.4d400d,mp4a.40.2');
+  return browserSupportsCodec('avc1.4d400d,mp4a.40.2', true);
 };
 
 // register source handlers with the appropriate techs
